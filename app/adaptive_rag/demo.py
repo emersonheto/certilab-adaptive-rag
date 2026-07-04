@@ -35,7 +35,7 @@ from app.ingestion.loader import (
     load_pdf_texts,
 )
 from app.ingestion.splitter import build_pdf_chunks
-from app.security.access_control import Principal, scope_from_principal
+from app.security.access_control import AccessScope, Principal, scope_from_principal
 from app.tools.web_search import TavilyWebSearch, WebSearchConfig
 
 DEFAULT_QUESTION = "¿Cuantos certificados vigentes tiene el cliente 101?"
@@ -115,6 +115,45 @@ def _run_stream(graph: Any, initial_state: AdaptiveRAGState) -> str:
     return generation
 
 
+def _customer_name_matches_question(name_lower: str, question_lower: str) -> bool:
+    """Return True when *question* contains most significant words of *name*."""
+    words = [w for w in name_lower.split() if len(w) > 2]
+    if not words:
+        return False
+    matched = sum(1 for w in words if w in question_lower)
+    return matched >= min(2, len(words))  # at least 2 words or all if name is short
+
+
+def _scope_from_question(question: str, scope: AccessScope, settings: Any) -> AccessScope:
+    """Narrow *scope* to a specific customer when the question mentions one by name.
+
+    Loads the customer list from MySQL (real mode) or mock fixtures, then
+    performs a case-insensitive substring match against ``question``.
+    """
+    try:
+        from app.ingestion.loader import load_customers
+        from app.tools.mysql_connector import MySQLCertificateConnector, MySQLConnectorConfig
+
+        if settings.app_mode == "real":
+            connector = MySQLCertificateConnector(MySQLConnectorConfig.from_settings(settings))
+            rows = connector.fetch_customers()
+            customers = {row["id"]: str(row["company_name"]) for row in rows}
+        else:
+            model_customers = load_customers(settings.data_dir)
+            customers = {c.id: c.name for c in model_customers}
+    except Exception:
+        return scope
+
+    question_lower = question.lower()
+    for cid, name in customers.items():
+        name_lower = name.lower()
+        # Match when the question contains the full name, OR the name
+        # contains all significant words from the question.
+        if name_lower in question_lower or _customer_name_matches_question(name_lower, question_lower):
+            return AccessScope(role=scope.role, customer_id=cid, user_id=scope.user_id)
+    return scope
+
+
 def main(argv: list[str] | None = None) -> None:
     """Run the Adaptive RAG demo CLI.
 
@@ -155,6 +194,10 @@ def main(argv: list[str] | None = None) -> None:
 
     principal = Principal(role=Role.ADMIN, customer_id=None, user_id=1)
     scope = scope_from_principal(principal)
+
+    # Narrow scope when the question mentions a customer by name.
+    if scope.is_global:
+        scope = _scope_from_question(question, scope, settings)
 
     initial_state: AdaptiveRAGState = {
         "question": question,

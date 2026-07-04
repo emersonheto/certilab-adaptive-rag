@@ -25,6 +25,7 @@ import tempfile
 import uuid
 from dataclasses import dataclass
 from datetime import date
+from pathlib import Path
 from typing import Any
 
 import fitz
@@ -65,6 +66,13 @@ class IngestResult:
 
 def main() -> None:
     """CLI entry point: load certs from MySQL, extract, embed, and index."""
+
+    # Load .env from project root so API keys and DB creds reach Settings()
+    # even when they haven't been exported to the shell environment.
+    _project_root_env = Path(__file__).parents[2] / ".env"
+    if _project_root_env.exists():
+        from dotenv import load_dotenv as _load_dotenv
+        _load_dotenv(_project_root_env, override=False)
 
     settings = Settings()
     if settings.app_mode != "real":
@@ -504,6 +512,13 @@ def _enrich_chunk(
 ) -> dict[str, Any]:
     """Build a metadata-rich chunk payload for Qdrant."""
 
+    # Prepend certificate context to the chunk text so retrieval and grading
+    # can match against customer name and certificate code semantically.
+    enriched_text = (
+        f"Certificado {cert_meta.code} | Cliente: {cert_meta.customer_name}"
+        f" | Fecha: {cert_meta.issue_date.isoformat()}\n{text}"
+    )
+
     payload: dict[str, Any] = {
         "certificate_id": cert_meta.id,
         "certificate_code": cert_meta.code,
@@ -513,7 +528,7 @@ def _enrich_chunk(
         "chunk_type": chunk_type,
         "source_type": "pdf_certificate",
         "page": page if page is not None else 1,
-        "text": text,
+        "text": enriched_text,
     }
     if parameter:
         payload["parameter"] = parameter
@@ -544,11 +559,27 @@ def _embed_and_index(
 
     from qdrant_client.models import PointStruct
 
-    texts = [chunk["text"] for chunk in chunks]
+    # Drop chunks that exceed OpenAI's text-embedding-3-small 8192-token limit.
+    # Conservatively filter at 30 000 characters (~7 000 tokens for Spanish).
+    _MAX_CHUNK_CHARS = 30_000
+    valid_chunks: list[dict[str, Any]] = []
+    for chunk in chunks:
+        if len(chunk["text"]) > _MAX_CHUNK_CHARS:
+            logger.warning(
+                "ingest.chunk_skipped_oversized",
+                text_len=len(chunk["text"]),
+                chunk_type=chunk.get("chunk_type", "unknown"),
+            )
+            continue
+        valid_chunks.append(chunk)
+    if not valid_chunks:
+        return 0
+
+    texts = [chunk["text"] for chunk in valid_chunks]
     vectors = embedding_provider.embed_batch(texts)
 
     points: list[Any] = []
-    for chunk, vector in zip(chunks, vectors, strict=True):
+    for chunk, vector in zip(valid_chunks, vectors, strict=True):
         doc_id = str(uuid.UUID(hashlib.md5(chunk["text"].encode()).hexdigest()))
         chunk["chunk_id"] = doc_id
         points.append(PointStruct(id=doc_id, vector=vector, payload=chunk))
@@ -573,9 +604,10 @@ def _load_certificates(connector: Any) -> list[Any]:
     certificates: list[Certificate] = []
     for row in rows:
         code = str(row.get("code", ""))
-        pdf_path = str(row.get("pdf_document_path", ""))
-        if code.lower() == "test" or not pdf_path:
+        raw_pdf = row.get("pdf_document_path")
+        if code.lower() == "test" or not raw_pdf:
             continue
+        pdf_path = str(raw_pdf)
         certificates.append(
             Certificate(
                 id=int(row["id"]),

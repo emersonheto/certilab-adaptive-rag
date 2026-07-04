@@ -35,13 +35,19 @@ NodeFn = Any  # Callable[[State], State], kept loose for LangGraph compatibility
 # --- Inline prompts (NOT hub.pull — avoids langchain-community dependency) ---
 
 _ROUTE_PROMPT = """You are an expert at routing a user question to a vectorstore or web search.
-The vectorstore contains documents related to calibration certificates, laboratory data, and technical measurements.
-Use the vectorstore for questions about these topics. Otherwise, use web search.
+The vectorstore contains documents about calibration certificates, laboratory data, technical
+measurements, AND customer/company information for Certilab clients. Use the vectorstore for
+ANY question about certificates, customers, companies, calibration procedures, equipment,
+measurements, or laboratory standards. Only use web search for general knowledge questions
+completely unrelated to Certilab (e.g. news, weather, general definitions).
 
 Question: {question}"""
 
 _GRADE_PROMPT = """You are a grader assessing relevance of a retrieved document to a user question.
-If the document contains keywords or semantic meaning related to the question, grade it as relevant.
+Grade the document as relevant if it contains information about the same topic, customer, certificate,
+or measurement mentioned in the question — even if the document doesn't explicitly restate the
+question words. For example, a certificate chunk for "ALERTA TECNICA" is relevant to questions
+about ALERTA TECNICA, even if the chunk text is technical data.
 
 Retrieved document: {document}
 
