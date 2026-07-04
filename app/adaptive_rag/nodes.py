@@ -48,10 +48,11 @@ def _get_parser() -> Any:
 
 _ROUTE_PROMPT = """You are an expert at routing a user question to a vectorstore or web search.
 The vectorstore contains documents about calibration certificates, laboratory data, technical
-measurements, AND customer/company information for Certilab clients. Use the vectorstore for
-ANY question about certificates, customers, companies, calibration procedures, equipment,
-measurements, or laboratory standards. Only use web search for general knowledge questions
-completely unrelated to Certilab (e.g. news, weather, general definitions).
+measurements (temperature °C, humidity, uncertainty values), AND customer/company information
+for Certilab clients. Use the vectorstore for ANY question about certificates, customers,
+companies, calibration procedures, equipment, measurements (including temperature, humidity,
+or any numerical scientific data), or laboratory standards. Only use web search for general
+knowledge questions completely unrelated to Certilab (e.g. news, weather, general definitions).
 
 Question: {question}"""
 
