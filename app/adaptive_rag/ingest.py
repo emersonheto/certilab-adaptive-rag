@@ -167,6 +167,36 @@ def main() -> None:
     total_tables = sum(s.tables for s in stats_list)
     total_graphs = sum(s.graphs for s in stats_list)
 
+    # Second pass: create metadata-only chunks for certs WITHOUT PDFs.
+    # These provide status/type/date data even when no PDF is available.
+    raw_rows = connector.fetch_certificates()
+    meta_only: list[dict[str, Any]] = []
+    for row in raw_rows:
+        code = str(row.get("code", ""))
+        pdf = row.get("pdf_document_path")
+        if code.lower() == "test" or pdf:
+            continue  # skip test + certs already processed via PDF
+        cid = int(row["customer_id"])
+        meta = CertMeta(
+            id=int(row["id"]),
+            code=code,
+            customer_id=cid,
+            customer_name=customers.get(cid, f"Customer-{cid}"),
+            issue_date=_parse_issue_date(row.get("issue_date")),
+            pdf_path="",
+            status=_STATUS_LABELS.get(int(row.get("status", 0)), ""),
+            document_type=_DOCUMENT_TYPE_LABELS.get(int(row.get("document_type", 0) or 0)),
+            service_date=_parse_optional_date(row.get("service_date")),
+            request_number=str(row.get("request_number", "")) if row.get("request_number") else None,
+        )
+        meta_only.append(meta)
+
+    if meta_only:
+        chunks: list[dict[str, Any]] = [_build_metadata_chunk(m) for m in meta_only]
+        indexed = _embed_and_index(chunks, embedding_provider, index)
+        total_chunks += indexed
+        print(f"Metadata-only pass: {len(meta_only)} certificates → {indexed} chunks")
+
     print(
         f"Done: {len(stats_list)}/{total} certificates → "
         f"{total_chunks} chunks indexed "
