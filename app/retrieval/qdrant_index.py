@@ -233,6 +233,58 @@ class QdrantVectorIndex:
         logger.debug("qdrant.search.complete", results=len(result), duration_ms=int((time.perf_counter() - started_at) * 1000))
         return result
 
+    def upsert_points(self, points: list[Any]) -> tuple[int, int]:
+        """Upsert pre-built points with idempotent deduplication.
+
+        Accepts ``qdrant_client.models.PointStruct`` objects (or the internal
+        ``_SimplePoint`` stand-in) whose IDs are already deterministic. Existing
+        IDs are skipped without re-embedding. This lets callers store richer
+        payloads (page numbers, chunk_type, parameter, image references) than
+        the ``DocumentChunk``-based :meth:`upsert` path while reusing the same
+        collection, batching, and tenant-isolation logic.
+        """
+
+        started_at = time.perf_counter()
+        logger.info("qdrant.upsert_points.start", total_points=len(points))
+        with trace_span("rag.ingest.upsert_points") as span:
+            if not points:
+                span.set_attribute("rag.ingest.new_points", 0)
+                span.set_attribute("rag.ingest.skipped_points", 0)
+                span.set_attribute("rag.duration_ms", int((time.perf_counter() - started_at) * 1000))
+                logger.info("qdrant.upsert_points.complete", new_points=0, skipped=0, duration_ms=int((time.perf_counter() - started_at) * 1000))
+                return 0, 0
+
+            candidate_uuids: dict[str, Any] = {str(point.id): point for point in points}
+            existing = self._client.retrieve(
+                collection_name=self._collection_name,
+                ids=list(candidate_uuids.keys()),
+                with_payload=False,
+                with_vectors=False,
+            )
+            existing_ids = {str(point.id) for point in existing}
+            new_points = [point for uuid_str, point in candidate_uuids.items() if uuid_str not in existing_ids]
+            skipped_count = len(points) - len(new_points)
+
+            if not new_points:
+                span.set_attribute("rag.ingest.new_points", 0)
+                span.set_attribute("rag.ingest.skipped_points", skipped_count)
+                span.set_attribute("rag.duration_ms", int((time.perf_counter() - started_at) * 1000))
+                logger.info("qdrant.upsert_points.complete", new_points=0, skipped=skipped_count, duration_ms=int((time.perf_counter() - started_at) * 1000))
+                return 0, skipped_count
+
+            batch_size = self._upsert_batch_size
+            for i in range(0, len(new_points), batch_size):
+                self._client.upsert(
+                    collection_name=self._collection_name,
+                    points=new_points[i : i + batch_size],
+                )
+
+            span.set_attribute("rag.ingest.new_points", len(new_points))
+            span.set_attribute("rag.ingest.skipped_points", skipped_count)
+            span.set_attribute("rag.duration_ms", int((time.perf_counter() - started_at) * 1000))
+            logger.info("qdrant.upsert_points.complete", new_points=len(new_points), skipped=skipped_count, duration_ms=int((time.perf_counter() - started_at) * 1000))
+            return len(new_points), skipped_count
+
     def get_stats(self) -> dict[str, Any]:
         """Return collection statistics for ingestion tracking."""
 

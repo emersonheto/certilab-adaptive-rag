@@ -13,6 +13,10 @@ dependencies = [
     "pydantic-settings>=2.0",
     "python-dotenv>=1.0",
     "structlog>=26.1.0",
+    "pymupdf>=1.28.0",
+    "camelot-py[cv]>=2.0.0",
+    "unstructured[local-inference,pdf]>=0.23.1",
+    "pi-heif>=1.4.0",
 ]
 
 [project.optional-dependencies]
