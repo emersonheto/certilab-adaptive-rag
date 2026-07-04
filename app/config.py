@@ -13,6 +13,10 @@ from app.retrieval.constants import DEFAULT_RETRIEVAL_TOP_K
 DEFAULT_OPERATOR_ENV_FILE = Path.home() / ".config" / "certilab-agentic-rag" / ".env"
 DOTENV_DISABLE_VALUES = {"1", "true", "yes", "on"}
 
+# ── Project root ──
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
 
 def resolve_env_file() -> Path | None:
     """Return the external operator env file to load, if dotenv loading is enabled."""
@@ -28,6 +32,37 @@ def resolve_env_file() -> Path | None:
         return DEFAULT_OPERATOR_ENV_FILE
 
     return None
+
+
+def load_project_env() -> None:
+    """Load ``.env`` into ``os.environ`` so ``Settings()`` picks it up.
+
+    Cascading order (last wins):
+    1. Project root ``.env`` (low priority — dev defaults).
+    2. Operator env file (higher priority — secrets overrides).
+
+    Call this **once** at import time.  After it runs, ``Settings()``
+    reads everything from ``os.environ`` just like any shell environment.
+    """
+    if os.getenv("CERTILAB_RAG_DISABLE_DOTENV", "").casefold() in DOTENV_DISABLE_VALUES:
+        return
+
+    from dotenv import load_dotenv
+
+    # 1 — Project root .env (dev defaults, lowest priority)
+    project_env = _PROJECT_ROOT / ".env"
+    if project_env.exists():
+        load_dotenv(project_env, override=False)
+
+    # 2 — Operator env file (secrets, overrides project)
+    operator_env = resolve_env_file()
+    if operator_env and operator_env.exists():
+        load_dotenv(operator_env, override=False)
+
+
+# Eager-load so every consumer of config.py gets the cascaded env vars
+# without calling load_project_env() manually.
+load_project_env()
 
 
 class Settings(BaseSettings):

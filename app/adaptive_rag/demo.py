@@ -21,8 +21,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from dotenv import load_dotenv
-
 from app.adaptive_rag.graph import build_graph
 from app.adaptive_rag.state import AdaptiveRAGState
 from app.config import Settings
@@ -150,7 +148,7 @@ def _scope_from_question(question: str, scope: AccessScope, settings: Any) -> Ac
         # Match when the question contains the full name, OR the name
         # contains all significant words from the question.
         if name_lower in question_lower or _customer_name_matches_question(name_lower, question_lower):
-            return AccessScope(role=scope.role, customer_id=cid, user_id=scope.user_id)
+            return AccessScope(role=scope.role, customer_id=cid, user_id=scope.user_id)  # type: ignore[arg-type]
     return scope
 
 
@@ -165,12 +163,6 @@ def main(argv: list[str] | None = None) -> None:
             If ``None``, reads from ``sys.argv``. Defaults to
             :data:`DEFAULT_QUESTION` when no argument is provided.
     """
-
-    # Load .env from the project root so keys defined there reach Settings()
-    # even when they haven't been exported to the shell environment.
-    _project_root_env = Path(__file__).parents[2] / ".env"
-    if _project_root_env.exists():
-        load_dotenv(_project_root_env, override=False)
 
     settings = Settings()
 

@@ -25,7 +25,6 @@ import tempfile
 import uuid
 from dataclasses import dataclass
 from datetime import date
-from pathlib import Path
 from typing import Any
 
 import fitz
@@ -41,6 +40,10 @@ _GRAPH_SIZE_THRESHOLD = 50_000
 # PyMuPDF text block type for actual text (type 1 is image blocks).
 _FITZ_TEXT_BLOCK_TYPE = 0
 
+# Chunks larger than this (~8 000 OpenAI embedding tokens) are split into
+# row-level sub-chunks before embed+index.
+_MAX_CHUNK_CHARS = 30_000
+
 
 @dataclass(frozen=True)
 class CertMeta:
@@ -52,6 +55,22 @@ class CertMeta:
     customer_name: str
     issue_date: date
     pdf_path: str
+    s3_key: str = ""               # Full S3 key (prefix + path), for reference
+    status: str = ""               # "Pendiente" | "Firmado"
+    document_type: str | None = None  # "Acreditado" | "No acreditado"
+    service_date: date | None = None
+    request_number: str | None = None
+
+
+# Labels matching the production MySQLLoader for status and document_type
+_STATUS_LABELS: dict[int, str] = {1: "Pendiente", 2: "Firmado"}
+_DOCUMENT_TYPE_LABELS: dict[int, str] = {0: "No acreditado", 1: "Acreditado"}
+
+# Spanish month names for date-enriched chunk text
+_SPANISH_MONTHS: dict[int, str] = {
+    1: "enero", 2: "febrero", 3: "marzo", 4: "abril", 5: "mayo", 6: "junio",
+    7: "julio", 8: "agosto", 9: "septiembre", 10: "octubre", 11: "noviembre", 12: "diciembre",
+}
 
 
 @dataclass(frozen=True)
@@ -66,13 +85,6 @@ class IngestResult:
 
 def main() -> None:
     """CLI entry point: load certs from MySQL, extract, embed, and index."""
-
-    # Load .env from project root so API keys and DB creds reach Settings()
-    # even when they haven't been exported to the shell environment.
-    _project_root_env = Path(__file__).parents[2] / ".env"
-    if _project_root_env.exists():
-        from dotenv import load_dotenv as _load_dotenv
-        _load_dotenv(_project_root_env, override=False)
 
     settings = Settings()
     if settings.app_mode != "real":
@@ -106,6 +118,13 @@ def main() -> None:
     print(f"Progress: {total} certificates to ingest")
     for current, cert in enumerate(certificates, start=1):
         customer_name = customers.get(cert.customer_id, "Unknown")
+        s3_prefix = s3_loader.normalized_prefix
+        s3_key = f"{s3_prefix}/{cert.pdf_path}" if s3_prefix else cert.pdf_path
+
+        # Map status and document_type to human-readable labels
+        status_label = _STATUS_LABELS.get(int(cert.status), cert.status) if cert.status else ""
+        doc_type_label = _DOCUMENT_TYPE_LABELS.get(int(cert.document_type)) if cert.document_type else None
+
         cert_meta = CertMeta(
             id=cert.id,
             code=cert.code,
@@ -113,6 +132,11 @@ def main() -> None:
             customer_name=customer_name,
             issue_date=cert.emitted_at,
             pdf_path=cert.pdf_path,
+            s3_key=s3_key,
+            status=status_label,
+            document_type=doc_type_label,
+            service_date=cert.service_date,
+            request_number=cert.request_number,
         )
 
         try:
@@ -245,7 +269,7 @@ def _extract_tables_camelot(
         tmp_path = tmp.name
 
     try:
-        tables = camelot.read_pdf(tmp_path, pages="all")
+        tables = camelot.read_pdf(tmp_path, pages="all")  # type: ignore[attr-defined]
     except Exception as exc:
         logger.warning("ingest.camelot_read_failed", error=type(exc).__name__)
         return []
@@ -289,7 +313,7 @@ def _infer_table_title(table: Any, text_blocks: list[dict[str, Any]]) -> str:
         return "Datos del certificado"
 
     candidates.sort(key=lambda b: b["bbox"][3], reverse=True)
-    return candidates[0]["text"]
+    return candidates[0]["text"]  # type: ignore[no-any-return]
 
 
 def _extract_graphs_fitz(doc: fitz.Document) -> list[dict[str, Any]]:
@@ -394,6 +418,95 @@ def _classify_unstructured_chunk(category: str) -> str:
             return "text"
 
 
+def _build_metadata_chunk(cert_meta: CertMeta) -> dict[str, Any]:
+    """Create a rich metadata chunk from MySQL certificate data.
+
+    This chunk is embedded so vector search can match certificate-level
+    questions like "¿cuántos certificados tiene X?" or "certificados de mayo 2026".
+    """
+
+    month_es = _SPANISH_MONTHS.get(cert_meta.issue_date.month, "")
+    date_text = f"{month_es} {cert_meta.issue_date.year} ({cert_meta.issue_date.isoformat()})"
+
+    parts = [
+        f"Certificado {cert_meta.code}",
+        f"Cliente: {cert_meta.customer_name}",
+        f"Emitido: {date_text}",
+    ]
+    if cert_meta.service_date:
+        sm = _SPANISH_MONTHS.get(cert_meta.service_date.month, "")
+        parts.append(f"Servicio: {sm} {cert_meta.service_date.year} ({cert_meta.service_date.isoformat()})")
+    if cert_meta.status:
+        parts.append(f"Estado: {cert_meta.status}")
+    if cert_meta.document_type:
+        parts.append(f"Tipo: {cert_meta.document_type}")
+    if cert_meta.request_number:
+        parts.append(f"Solicitud: {cert_meta.request_number}")
+
+    return {
+        "text": " | ".join(parts),
+        "certificate_id": cert_meta.id,
+        "certificate_code": cert_meta.code,
+        "customer_id": cert_meta.customer_id,
+        "customer_name": cert_meta.customer_name,
+        "issue_date": cert_meta.issue_date.isoformat(),
+        "chunk_type": "metadata",
+        "source_type": "mysql_certificate",
+        "page": 1,
+    }
+
+
+
+def _split_oversized_chunk(text: str) -> list[str]:
+    """Split a large chunk into row-level sub-chunks for better retrieval.
+
+    Table chunks from Camelot/Unstructured can be 30K+ chars (e.g. 16-row
+    time-series measurement tables). Each row becomes its own chunk, with
+    the table header context prepended.
+    """
+    lines = text.split("\n")
+    if len(lines) < 3:
+        # Can't meaningfully split — return as-is truncated
+        return [text[:_MAX_CHUNK_CHARS]]
+
+    header_lines: list[str] = []
+    data_lines: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("TABLA:") or stripped.startswith("|"):
+            if not header_lines and stripped.startswith("TABLA:"):
+                header_lines.append(stripped)
+            elif stripped.startswith("|"):
+                data_lines.append(stripped)
+            elif stripped.startswith("TABLA:"):
+                header_lines.append(stripped)
+        else:
+            if header_lines:
+                header_lines.append(stripped)
+            else:
+                data_lines.append(stripped)
+
+    header = "\n".join(header_lines) if header_lines else ""
+    sub_chunks: list[str] = []
+    current: list[str] = []
+    current_len = len(header)
+
+    for row in data_lines:
+        row_len = len(row) + 1  # +1 for newline
+        if current_len + row_len > 1500 and current:
+            sub_chunks.append(header + "\n" + "\n".join(current))
+            current = [row]
+            current_len = len(header) + row_len
+        else:
+            current.append(row)
+            current_len += row_len
+
+    if current:
+        sub_chunks.append(header + "\n" + "\n".join(current))
+
+    return sub_chunks if sub_chunks else [text[:_MAX_CHUNK_CHARS]]
+
+
 def _build_chunks(
     text_blocks: list[dict[str, Any]],
     tables: list[str],
@@ -406,25 +519,48 @@ def _build_chunks(
     The output combines semantic text chunks (Unstructured), structured tables
     (Camelot), and graph references (PyMuPDF). Every chunk carries the
     certificate and customer metadata required for tenant-isolated retrieval.
+
+    Oversized table chunks (>30K chars) are split into row-level sub-chunks
+    with the table header repeated, so time-series measurement data is
+    retrievable.
     """
 
     chunks: list[dict[str, Any]] = []
+
+    # Always create a metadata-rich chunk from MySQL data so the retriever
+    # can answer questions about certificates without needing the PDF text.
+    chunks.append(_build_metadata_chunk(cert_meta))
 
     # Prefer semantic chunks when Unstructured succeeded; otherwise fall back
     # to flat PyMuPDF text blocks grouped by page.
     source_chunks = semantic_chunks if semantic_chunks else _blocks_to_chunks(text_blocks)
     for source_chunk in source_chunks:
+        text = source_chunk.get("text", "")
         page = source_chunk.get("page")
         if page is None:
-            page = _estimate_page_for_text(source_chunk["text"], text_blocks)
-        chunks.append(
-            _enrich_chunk(
-                text=source_chunk["text"],
-                chunk_type=source_chunk.get("chunk_type", "text"),
-                cert_meta=cert_meta,
-                page=page,
+            page = _estimate_page_for_text(text, text_blocks)
+
+        # Split oversized chunks into row-level sub-chunks for better retrieval
+        if len(text) > _MAX_CHUNK_CHARS:
+            sub_chunks = _split_oversized_chunk(text)
+            for sub_text in sub_chunks:
+                chunks.append(
+                    _enrich_chunk(
+                        text=sub_text,
+                        chunk_type=source_chunk.get("category", "composite"),
+                        cert_meta=cert_meta,
+                        page=page,
+                    )
+                )
+        else:
+            chunks.append(
+                _enrich_chunk(
+                    text=text,
+                    chunk_type=source_chunk.get("category", "composite"),
+                    cert_meta=cert_meta,
+                    page=page,
+                )
             )
-        )
 
     # Each Camelot table becomes a self-contained chunk.
     for table_text in tables:
@@ -482,8 +618,8 @@ def _estimate_page_for_text(text: str, text_blocks: list[dict[str, Any]]) -> int
     for block in text_blocks:
         snippet = text[:120]
         if snippet and snippet in block["text"] or block["text"][:120] in text:
-            return block["page"]
-    return text_blocks[0]["page"]
+            return block["page"]  # type: ignore[no-any-return]
+    return text_blocks[0]["page"]  # type: ignore[no-any-return]
 
 
 def _parse_table_header(table_text: str) -> tuple[str, str | None]:
@@ -559,9 +695,7 @@ def _embed_and_index(
 
     from qdrant_client.models import PointStruct
 
-    # Drop chunks that exceed OpenAI's text-embedding-3-small 8192-token limit.
-    # Conservatively filter at 30 000 characters (~7 000 tokens for Spanish).
-    _MAX_CHUNK_CHARS = 30_000
+    # Drop remaining oversized chunks (should be rare after _split_oversized_chunk).
     valid_chunks: list[dict[str, Any]] = []
     for chunk in chunks:
         if len(chunk["text"]) > _MAX_CHUNK_CHARS:
@@ -585,7 +719,7 @@ def _embed_and_index(
         points.append(PointStruct(id=doc_id, vector=vector, payload=chunk))
 
     new_count, _skipped = index.upsert_points(points)
-    return new_count
+    return new_count  # type: ignore[no-any-return]
 
 
 def _load_customers(connector: Any) -> dict[int, str]:
