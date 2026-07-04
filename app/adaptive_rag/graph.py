@@ -10,10 +10,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from langgraph.graph import END, START, StateGraph
-from langgraph.graph.state import CompiledStateGraph
-from langchain_openai import ChatOpenAI
-
 from app.adaptive_rag.nodes import (
     make_generate,
     make_grade_documents,
@@ -59,7 +55,7 @@ def check_hallucinations(state: AdaptiveRAGState) -> str:
         return "generate"
     if state.get("answer_verdict") == "not_useful" and state["rewrite_count"] < _MAX_REWRITE:
         return "transform_query"
-    return END
+    return "__end__"  # langgraph.graph.END
 
 
 def route_after_question(state: AdaptiveRAGState) -> str:
@@ -73,21 +69,18 @@ def build_graph(
     embeddings: object | None,
     web_search: TavilyWebSearch,
     settings: Settings,
-    llm: ChatOpenAI | None = None,
-) -> CompiledStateGraph[AdaptiveRAGState, Any, Any, Any]:
+    llm: Any = None,
+) -> Any:
     """Assemble the 7-node Adaptive RAG StateGraph with self-correction loops.
 
     Args:
         index: Vector index supporting the ``search(query, allowed_ids, top_k)`` protocol.
-        embeddings: Embeddings provider (``None`` for mock/InMemory mode; an
-            ``EmbeddingsProvider`` instance for real mode where it is already
-            injected into the ``QdrantVectorIndex`` at construction).
+        embeddings: Embeddings provider (``None`` for mock/InMemory mode).
         web_search: Tavily web-search client.
         settings: Application settings — used to build the ``ChatOpenAI``
-            instance and forwarded to every node factory for ``trace_span``
-            attributes and ``default_top_k``.
-        llm: Optional ``ChatOpenAI`` override (primarily for tests injecting a
-            fake LLM).  When ``None``, built from ``settings.openai_chat_model``
+            instance and forwarded to every node factory.
+        llm: Optional ``ChatOpenAI`` override (primarily for tests).
+            When ``None``, built from ``settings.openai_chat_model``
             and ``settings.openai_temperature``.
 
     Returns:
@@ -95,6 +88,7 @@ def build_graph(
     """
 
     if llm is None:
+        from langchain_openai import ChatOpenAI  # noqa: PLC0415
         llm = ChatOpenAI(
             model=settings.openai_chat_model,
             temperature=settings.openai_temperature,
@@ -107,6 +101,8 @@ def build_graph(
     web_search_node = make_web_search(web_search, settings)
     generate = make_generate(llm, settings)
     hallucination_check = make_hallucination_check(llm, settings)
+
+    from langgraph.graph import END, START, StateGraph  # noqa: PLC0415
 
     workflow = StateGraph(AdaptiveRAGState)
     workflow.add_node("route_question", route_question)

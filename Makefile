@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help install test lint typecheck mock ingest up down clean
+.PHONY: help install test lint typecheck mock ingest up down clean setup dev run check
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
@@ -28,6 +28,12 @@ typecheck: ## Run mypy strict type checking
 	uv run mypy app
 
 check: lint typecheck test ## Run all checks (lint + typecheck + test)
+
+setup: install up ## Prepare environment: install deps + start services (Qdrant)
+
+dev: setup mock ## Full dev cycle: setup + run demo in mock mode
+
+run: mock ## Quick start — run demo in mock mode (assumes deps installed)
 
 mock: ## Run Adaptive RAG demo in mock mode (no external services needed)
 	@echo "Starting Adaptive RAG demo (mock mode)..."

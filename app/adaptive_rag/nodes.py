@@ -12,10 +12,8 @@ adaptive RAG execution path with per-node duration and result metadata.
 from __future__ import annotations
 
 import time
+from functools import cache
 from typing import Any, cast
-
-from langchain_core.output_parsers import StrOutputParser
-from langchain_openai import ChatOpenAI
 
 from app.adaptive_rag.grader import (
     GradeAnswer,
@@ -31,6 +29,20 @@ from app.tools.web_search import TavilyWebSearch
 
 State = dict[str, Any]
 NodeFn = Any  # Callable[[State], State], kept loose for LangGraph compatibility
+
+
+@cache
+def _get_llm(settings: Settings) -> Any:
+    """Lazy-import and cache a ``ChatOpenAI`` instance (certilab-rag-patterns rule 1)."""
+    from langchain_openai import ChatOpenAI  # noqa: PLC0415
+    return ChatOpenAI(model=settings.openai_chat_model, temperature=settings.openai_temperature)
+
+
+def _get_parser() -> Any:
+    """Lazy-import ``StrOutputParser`` (used by transform_query node)."""
+    from langchain_core.output_parsers import StrOutputParser  # noqa: PLC0415
+    return StrOutputParser()
+
 
 # --- Inline prompts (NOT hub.pull — avoids langchain-community dependency) ---
 
@@ -95,7 +107,7 @@ def _elapsed_ms(started_at: float) -> int:
     return int((time.perf_counter() - started_at) * 1000)
 
 
-def make_route_question(llm: ChatOpenAI, settings: Settings) -> NodeFn:
+def make_route_question(llm: Any, settings: Settings) -> NodeFn:
     """Create the ``route_question`` node: classifies to vectorstore or web_search."""
 
     def route_question(state: State) -> State:
@@ -153,7 +165,7 @@ def make_retrieve(embeddings: object | None, index: VectorIndex, settings: Setti
     return retrieve
 
 
-def make_grade_documents(llm: ChatOpenAI, settings: Settings) -> NodeFn:
+def make_grade_documents(llm: Any, settings: Settings) -> NodeFn:
     """Create the ``grade_documents`` node: filters docs to relevant ones only."""
 
     def grade_documents(state: State) -> State:
@@ -177,7 +189,7 @@ def make_grade_documents(llm: ChatOpenAI, settings: Settings) -> NodeFn:
     return grade_documents
 
 
-def make_transform_query(llm: ChatOpenAI, settings: Settings) -> NodeFn:
+def make_transform_query(llm: Any, settings: Settings) -> NodeFn:
     """Create the ``transform_query`` node: rewrites question for better retrieval."""
 
     def transform_query(state: State) -> State:
@@ -188,7 +200,7 @@ def make_transform_query(llm: ChatOpenAI, settings: Settings) -> NodeFn:
         ) as span:
             prompt = _REWRITE_PROMPT.format(question=state["question"])
             response = llm.invoke(prompt)
-            rewritten = StrOutputParser().invoke(response)
+            rewritten = _get_parser().invoke(response)
             span.set_attribute("rag.duration_ms", _elapsed_ms(started))
             return {"question": rewritten, "rewrite_count": state["rewrite_count"] + 1}
 
@@ -212,7 +224,7 @@ def make_web_search(web_search: TavilyWebSearch, settings: Settings) -> NodeFn:
     return web_search_node
 
 
-def make_generate(llm: ChatOpenAI, settings: Settings) -> NodeFn:
+def make_generate(llm: Any, settings: Settings) -> NodeFn:
     """Create the ``generate`` node: produces an answer from context."""
 
     def generate(state: State) -> State:
@@ -229,7 +241,7 @@ def make_generate(llm: ChatOpenAI, settings: Settings) -> NodeFn:
             {"rag.question_length": len(state["question"]), "rag.source_count": len(documents)},
         ) as span:
             response = llm.invoke(prompt)
-            answer = StrOutputParser().invoke(response)
+            answer = _get_parser().invoke(response)
             span.set_attribute("rag.duration_ms", _elapsed_ms(started))
             return {
                 "generation": answer,
@@ -239,7 +251,7 @@ def make_generate(llm: ChatOpenAI, settings: Settings) -> NodeFn:
     return generate
 
 
-def make_hallucination_check(llm: ChatOpenAI, settings: Settings) -> NodeFn:
+def make_hallucination_check(llm: Any, settings: Settings) -> NodeFn:
     """Create the ``hallucination_check`` node: grades groundedness and usefulness."""
 
     def hallucination_check(state: State) -> State:

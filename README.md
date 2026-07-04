@@ -4,6 +4,36 @@ Implementación del patrón **Adaptive RAG** con LangGraph, OpenAI y Tavily, apl
 
 **Referencia**: [Building an Adaptive RAG System with LangGraph, OpenAI and Tavily](https://levelup.gitconnected.com/building-an-adaptive-rag-system-with-langgraph-openai-and-tavily-c4ee39d2f021)
 
+## Quick Start
+
+El proyecto usa `make` + `uv` para todo. Dos formas de arrancar:
+
+### 🏭 Modo real (con ingesta completa)
+
+```bash
+make setup        # instala deps + levanta Qdrant
+make ingest       # corre la ingesta desde MySQL + S3 (requiere .env configurado)
+make mock         # arranca el demo sobre los datos reales
+```
+
+La ingesta requiere credenciales de MySQL, S3, Qdrant y OpenAI configuradas en `.env`.
+
+### 🧪 Modo mock (sin servicios, sin credenciales — para probar rápido)
+
+```bash
+make install && make mock
+```
+
+Usa **fixtures locales** y **vector store en memoria**. No necesita Qdrant, MySQL, ni API keys.
+
+Para un solo comando en modo dev (mock):
+
+```bash
+make dev          # install + up + mock
+```
+
+> **⚠️ Nota**: no existe un solo comando que haga todo el pipeline real porque requiere MySQL, S3 y OpenAI accesibles.
+
 ## Qué hace
 
 Permite consultar certificados de calibración mediante un pipeline RAG que **se corrige a sí mismo**:
@@ -74,10 +104,11 @@ Cada chunk en Qdrant incluye payload enriquecido: `certificate_code`, `customer_
 
 ### Ejecutar la ingesta
 
+Requiere MySQL, S3, Qdrant, y OPENAI_API_KEY configurados en `.env`.
+
 ```bash
-# Requiere MySQL, S3, Qdrant, y OPENAI_API_KEY configurados en .env
-docker compose up -d qdrant
-uv run python -m app.adaptive_rag.ingest
+make up          # levanta Qdrant (docker compose up -d)
+make ingest      # corre el pipeline completo: MySQL → S3 → PyMuPDF → Camelot → Unstructured → Qdrant
 ```
 
 ## Instalación
@@ -85,15 +116,15 @@ uv run python -m app.adaptive_rag.ingest
 ```bash
 git clone https://github.com/emersonheto/certilab-adaptive-rag.git
 cd certilab-adaptive-rag
-uv sync
+make install          # instala todo (dev + real deps)
 cp .env.example .env
 # Editar .env con tu OPENAI_API_KEY
 ```
 
-Para modo real (ingesta desde MySQL + S3):
+Para solo modo mock (sin deps de Qdrant, MySQL, etc.):
 
 ```bash
-uv sync --extra real
+make install-light    # solo uv sync --extra dev
 ```
 
 ## Uso
@@ -101,7 +132,10 @@ uv sync --extra real
 ### Demo CLI
 
 ```bash
-# Modo mock (default — sin servicios externos)
+# Modo mock — recomendedo via Makefile (sin servicios externos)
+make mock
+
+# También funciona directamente:
 uv run python -m app.adaptive_rag.demo "¿Cuántos certificados tiene el cliente 101?"
 
 # Modo real (requiere Qdrant con datos indexados)
@@ -167,6 +201,16 @@ app/
 ```
 
 ## Pruebas
+
+```bash
+make check              # lint + typecheck + tests, de un solo comando
+make test               # solo tests
+make test-coverage      # tests con reporte de cobertura
+make lint               # solo ruff
+make typecheck          # solo mypy
+```
+
+O directamente:
 
 ```bash
 uv run pytest -q        # 52 tests
