@@ -46,60 +46,166 @@ def _get_parser() -> Any:
 
 # --- Inline prompts (NOT hub.pull — avoids langchain-community dependency) ---
 
-_ROUTE_PROMPT = """You are an expert at routing a user question to a vectorstore or web search.
-The vectorstore contains documents about calibration certificates, laboratory data, technical
-measurements (temperature °C, humidity, uncertainty values), AND customer/company information
-for Certilab clients. Use the vectorstore for ANY question about certificates, customers,
-companies, calibration procedures, equipment, measurements (including temperature, humidity,
-or any numerical scientific data), or laboratory standards. Only use web search for general
-knowledge questions completely unrelated to Certilab (e.g. news, weather, general definitions).
+_ROUTE_PROMPT = """<role>
+You are a routing classifier for a RAG system serving Certilab, a calibration laboratory.
+</role>
+
+<task>
+Classify the user question. Return "vectorstore" if it is about any of these topics:
+- Calibration certificates, procedures, or standards (e.g. INDECOPI, ISO)
+- Customers or companies (e.g. "ALS PERU", "cliente 101")
+- Technical measurements (temperature °C, humidity %, uncertainty, pressure)
+- Equipment, instruments, or laboratory data
+- Certificate status (Pendiente/Firmado) or type (Acreditado/No acreditado)
+- Dates or time periods related to certificates
+
+Return "web_search" ONLY for general knowledge completely unrelated to Certilab
+(e.g. news, weather, general science definitions).
+</task>
+
+<few_shot_examples>
+Q: "¿105°C es una temperatura segura?"
+A: vectorstore
+
+Q: "¿Quién ganó las elecciones?"
+A: web_search
+
+Q: "¿Cuántos certificados pendientes hay?"
+A: vectorstore
+</few_shot_examples>
 
 Question: {question}"""
 
-_GRADE_PROMPT = """You are a grader assessing relevance of a retrieved document to a user question.
-Grade the document as relevant if it contains information about the same topic, customer, certificate,
-or measurement mentioned in the question — even if the document doesn't explicitly restate the
-question words. For example, a certificate chunk for "ALERTA TECNICA" is relevant to questions
-about ALERTA TECNICA, even if the chunk text is technical data.
+_GRADE_PROMPT = """<role>
+You are a document relevance grader for a calibration certificate retrieval system.
+</role>
+
+<task>
+Determine whether the retrieved document is relevant to the user question.
+Return "yes" if the document discusses the same topic, customer, certificate,
+measurement, or equipment mentioned in the question — even if the exact words
+differ. Return "no" only if the document is clearly unrelated.
+</task>
+
+<constraints>
+- A document fragment from a Certilab certificate is ALWAYS relevant when the
+  question asks about certificates, customers, or calibration data.
+- Technical data (numbers, tables) IS relevant to measurement questions even
+  if it doesn't repeat the question text.
+- "No tengo información" is NOT a valid reason to grade as irrelevant.
+</constraints>
+
+<few_shot_examples>
+Q: "¿Cuántos certificados tiene ALERTA TECNICA?"
+Doc: "Certificado T-032.26-1 | Cliente: ALERTA TECNICA IMPORT EIRL | Fecha: 2026-04-21"
+Grade: yes
+
+Q: "¿Temperatura máxima a 105°C?"
+Doc: "Parámetro 105°C ±10°C | Máxima temperatura medida: 107.1°C"
+Grade: yes
+
+Q: "¿Certificados de mayo 2026?"
+Doc: "The weather in Lima was sunny"
+Grade: no
+</few_shot_examples>
 
 Retrieved document: {document}
 
 User question: {question}"""
 
-_REWRITE_PROMPT = """You are a question re-writer that converts an input question to a better version
-that is optimized for vector retrieval. Look at the input and try to reason about the
-underlying semantic intent / meaning.
+_REWRITE_PROMPT = """<role>
+You are a query rewriter for a calibration laboratory RAG system.
+</role>
 
-Here is the initial question:
-{question}
+<task>
+Rewrite the user question to improve vector search retrieval.
+Make the question more specific and precise while preserving the original intent.
+</task>
 
-Formulate an improved question."""
+<constraints>
+- Keep domain context: if the question is about Certilab certificates,
+  customers, or measurements, preserve that framing.
+- Add specificity: include relevant details (customer name, date range,
+  measurement type) extracted from the original question.
+- Do NOT change the core question — only make it clearer for retrieval.
+- Output ONLY the rewritten question, no explanation.
+</constraints>
 
-_RAG_PROMPT = """You are an assistant for question-answering tasks. Use the following pieces of \
-retrieved context to answer the question. If you don't know the answer, just say that you don't know. \
-Use three sentences maximum and keep the answer concise.
+<few_shot_examples>
+Original: "Dame info de calibración"
+Rewritten: "¿Qué información hay sobre procedimientos de calibración y certificados emitidos?"
+
+Original: "temperatura"
+Rewritten: "¿Qué mediciones de temperatura se registraron en los certificados de calibración?"
+</few_shot_examples>
+
+Initial question: {question}"""
+
+_RAG_PROMPT = """<role>
+You are a helpful assistant that answers questions about calibration certificates
+using ONLY the provided context. You serve Certilab, a calibration laboratory.
+</role>
+
+<task>
+Answer the user question based on the retrieved context below.
+If the context does not contain the answer, say "No tengo suficiente información para responder."
+Use 1-3 sentences. Be factual and concise.
+</task>
+
+<constraints>
+- Only use information present in the context.
+- Do NOT invent certificate numbers, dates, or measurements.
+- If the context contains certificate codes (e.g. T-043.26-1), include them.
+</constraints>
+
+Context:
+{context}
+
 Question: {question}
-Context: {context}
 Answer:"""
 
-_GROUNDEDNESS_PROMPT = """You are a grader assessing whether an LLM generation is grounded in / \
-supported by a set of retrieved facts. Give a binary score 'yes' or 'no' to indicate whether the answer \
-is grounded in the documents.
+_GROUNDEDNESS_PROMPT = """<role>
+You are a factual accuracy grader for a calibration certificate QA system.
+</role>
 
-Set of facts:
+<task>
+Determine whether the LLM answer is grounded in the provided facts.
+Return "yes" if every claim in the answer is supported by the facts.
+Return "no" if the answer makes claims NOT present in the facts.
+</task>
+
+<constraints>
+- A claim is grounded if the facts contain the same information,
+  even if phrased differently.
+- "No tengo información" or "No sé" IS grounded when the facts
+  indeed lack the requested data.
+</constraints>
+
+Facts:
 {documents}
 
-LLM generation:
+LLM answer:
 {generation}"""
 
-_ANSWER_PROMPT = """You are a grader assessing whether an answer resolves / addresses a question. \
-Give a binary score 'yes' or 'no' to indicate whether the answer resolves the question.
+_ANSWER_PROMPT = """<role>
+You are an answer quality grader for a calibration certificate QA system.
+</role>
 
-Here is the question:
-{question}
+<task>
+Determine whether the answer actually addresses the user question.
+Return "yes" if the answer provides useful information or honestly
+states it cannot answer. Return "no" only if the answer is off-topic
+or provides irrelevant information.
+</task>
 
-Here is the answer:
-{generation}"""
+<constraints>
+- "No tengo información" IS a valid answer when the data is absent.
+- An answer listing certificate codes IS useful for certificate queries.
+</constraints>
+
+Question: {question}
+
+Answer: {generation}"""
 
 
 def _elapsed_ms(started_at: float) -> int:
