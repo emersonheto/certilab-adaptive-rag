@@ -13,7 +13,6 @@ from __future__ import annotations
 import gzip
 import json
 import sys
-from collections.abc import Callable
 
 
 def main(backup_path: str, qdrant_url: str = "http://localhost:6333", collection: str = "certilab-rag") -> None:

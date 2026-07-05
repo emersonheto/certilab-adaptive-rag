@@ -9,8 +9,10 @@ htmlcov/
 venv/
 .env
 .DS_Store
+.codegraph/
 dist/
 build/
 *.egg-info/
 .ipynb_checkpoints/
 data/qdrant/*.gz
+samples/

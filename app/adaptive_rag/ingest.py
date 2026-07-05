@@ -170,22 +170,22 @@ def main() -> None:
     # Second pass: create metadata-only chunks for certs WITHOUT PDFs.
     # These provide status/type/date data even when no PDF is available.
     raw_rows = connector.fetch_certificates()
-    meta_only: list[dict[str, Any]] = []
+    meta_only: list[CertMeta] = []
     for row in raw_rows:
         code = str(row.get("code", ""))
         pdf = row.get("pdf_document_path")
         if code.lower() == "test" or pdf:
             continue  # skip test + certs already processed via PDF
-        cid = int(row["customer_id"])
+        cid = int(str(row["customer_id"]))
         meta = CertMeta(
-            id=int(row["id"]),
+            id=int(str(row["id"])),
             code=code,
             customer_id=cid,
             customer_name=customers.get(cid, f"Customer-{cid}"),
             issue_date=_parse_issue_date(row.get("issue_date")),
             pdf_path="",
-            status=_STATUS_LABELS.get(int(row.get("status", 0)), ""),
-            document_type=_DOCUMENT_TYPE_LABELS.get(int(row.get("document_type", 0) or 0)),
+            status=_STATUS_LABELS.get(int(str(row.get("status", 0))), ""),
+            document_type=_DOCUMENT_TYPE_LABELS.get(int(str(row.get("document_type", 0) or 0))),
             service_date=_parse_optional_date(row.get("service_date")),
             request_number=str(row.get("request_number", "")) if row.get("request_number") else None,
         )
@@ -774,7 +774,7 @@ def _load_certificates(connector: Any) -> list[Any]:
         pdf_path = str(raw_pdf)
         certificates.append(
             Certificate(
-                id=int(row["id"]),
+            id=int(str(row["id"])),
                 code=code,
                 customer_id=int(row["customer_id"]),
                 status=str(row.get("status", "")),
