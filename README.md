@@ -199,6 +199,29 @@ make test    # 58 tests
 make lint    # ruff + mypy
 ```
 
+## Pre-commit hooks
+
+This project uses [pre-commit](https://pre-commit.com/) to run linting, formatting, type checking, and secret detection automatically on every commit. This helps prevent issues like accidental API key leaks from reaching the repository history.
+
+Install the hooks once after cloning:
+
+```bash
+uv run pre-commit install
+```
+
+The hooks will run automatically on `git commit`. To run them manually against all files:
+
+```bash
+uv run pre-commit run --all-files
+```
+
+Configured checks include:
+
+- `ruff` — linting and formatting
+- `mypy` — static type checking on `app/`
+- `detect-secrets` — scans for potential secrets and credentials
+- Standard hooks — trailing whitespace, EOF fixer, YAML/TOML validation, and large file checks
+
 ## Referencias
 
 - [Building an Adaptive RAG System — LevelUp](https://levelup.gitconnected.com/building-an-adaptive-rag-system-with-langgraph-openai-and-tavily-c4ee39d2f021)
