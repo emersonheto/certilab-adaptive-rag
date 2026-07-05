@@ -3,8 +3,23 @@ name: CI
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "README.md"
+      - "docs/**"
+      - "notebooks/**"
+      - "LICENSE"
+      - ".gitignore"
+      - ".editorconfig"
   pull_request:
     branches: [main]
+    paths-ignore:
+      - "README.md"
+      - "docs/**"
+      - "notebooks/**"
+      - "LICENSE"
+      - ".gitignore"
+      - ".editorconfig"
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -39,7 +54,14 @@ jobs:
         run: uv run mypy app
 
       - name: Test with coverage
-        run: uv run pytest -v --cov=app --cov-report=xml --cov-report=term
+        run: uv run pytest -v --cov=app --cov-report=xml --cov-report=term --junitxml=test-results.xml
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results-${{ matrix.python-version }}
+          path: test-results.xml
 
       - name: Upload coverage
         uses: codecov/codecov-action@v5

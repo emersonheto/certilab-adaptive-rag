@@ -1,5 +1,10 @@
 # Certilab Adaptive RAG
 
+![CI](https://github.com/emersonheto/certilab-adaptive-rag/actions/workflows/ci.yml/badge.svg)
+[![codecov](https://codecov.io/gh/emersonheto/certilab-adaptive-rag/branch/main/graph/badge.svg)](https://codecov.io/gh/emersonheto/certilab-adaptive-rag)
+![Python](https://img.shields.io/badge/python-3.11%2B-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
+
 Implementación del patrón **Adaptive RAG** con LangGraph, OpenAI y Tavily, aplicada a la consulta de certificados de calibración reales. El grafo de 7 nodos con dos loops de auto-corrección —reescritura de query y verificación de alucinaciones— sigue la topología del artículo de referencia.
 
 **Referencia**: [Building an Adaptive RAG System with LangGraph, OpenAI and Tavily](https://levelup.gitconnected.com/building-an-adaptive-rag-system-with-langgraph-openai-and-tavily-c4ee39d2f021)
