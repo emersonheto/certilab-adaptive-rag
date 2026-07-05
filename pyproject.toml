@@ -40,6 +40,7 @@ adaptive-rag-ingest = "app.adaptive_rag.ingest:main"
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+extend-exclude = ["notebooks/", "samples/"]
 
 [tool.mypy]
 strict = true
@@ -47,6 +48,3 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-
-[tool.ruff]
-extend-exclude = ["notebooks/", "samples/"]
