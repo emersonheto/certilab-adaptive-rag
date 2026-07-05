@@ -124,10 +124,12 @@ cp .env.example .env
 ### Setup completo con datos reales (opcional)
 
 ```bash
-make setup    # levanta Qdrant + MySQL con datos seed (154 certificados)
-make ingest   # indexa los certificados en Qdrant con OpenAI embeddings
-make real     # prueba el demo en modo real
+make quickstart    # levanta Qdrant + MySQL + restaura 3,848 vectores pre-calculados
+make real          # prueba el demo en modo real
 ```
+
+> 💡 `make quickstart` descarga un backup de Qdrant (28 MB) con los embeddings ya calculados.
+> No necesita gastar en OpenAI. Alternativa: `make ingest` re-indexa desde cero.
 
 ### Solo modo mock (sin Docker)
 
