@@ -54,8 +54,6 @@ def generate_social_preview(output_path: str = "assets/social-preview.png") -> N
         draw.line([(0, i), (W, i)], fill=(r, g, b))
 
     # --- Accent diagonal stripe ---
-    accent = _rgb("#58a6ff")
-    accent_dark = _rgb("#1f6feb")
     for i in range(H):
         t = i / H
         r = int(88 * (1 - t) + 31 * t)
