@@ -116,15 +116,23 @@ make ingest      # corre el pipeline completo: MySQL → S3 → PyMuPDF → Came
 ```bash
 git clone https://github.com/emersonheto/certilab-adaptive-rag.git
 cd certilab-adaptive-rag
-make install          # instala todo (dev + real deps)
+uv sync
 cp .env.example .env
 # Editar .env con tu OPENAI_API_KEY
 ```
 
-Para solo modo mock (sin deps de Qdrant, MySQL, etc.):
+### Setup completo con datos reales (opcional)
 
 ```bash
-make install-light    # solo uv sync --extra dev
+make setup    # levanta Qdrant + MySQL con datos seed (154 certificados)
+make ingest   # indexa los certificados en Qdrant con OpenAI embeddings
+make real     # prueba el demo en modo real
+```
+
+### Solo modo mock (sin Docker)
+
+```bash
+make mock     # corre el demo con datos locales
 ```
 
 ## Uso
