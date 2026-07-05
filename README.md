@@ -6,33 +6,23 @@ Implementación del patrón **Adaptive RAG** con LangGraph, OpenAI y Tavily, apl
 
 ## Quick Start
 
-El proyecto usa `make` + `uv` para todo. Dos formas de arrancar:
-
-### 🏭 Modo real (con ingesta completa)
-
 ```bash
-make setup        # instala deps + levanta Qdrant
-make ingest       # corre la ingesta desde MySQL + S3 (requiere .env configurado)
-make mock         # arranca el demo sobre los datos reales
+git clone https://github.com/emersonheto/certilab-adaptive-rag.git
+cd certilab-adaptive-rag
+uv sync
+cp .env.example .env   # editar con tu OPENAI_API_KEY
 ```
 
-La ingesta requiere credenciales de MySQL, S3, Qdrant y OpenAI configuradas en `.env`.
+### 3 formas de ejecutarlo
 
-### 🧪 Modo mock (sin servicios, sin credenciales — para probar rápido)
+| Opción | Comando | Necesita | Descripción |
+|---|---|---|---|
+| **Mock** | `make mock` | Solo OpenAI key | Datos locales, sin Docker. La más rápida. |
+| **Real** | `make quickstart && make real` | Docker + OpenAI key | Qdrant + MySQL con 3,848 vectores pre-indexados (no gasta en embeddings). |
+| **Colab** | Ver `notebooks/` | OpenAI key | Ejecutar desde Google Colab sin instalar nada. |
 
-```bash
-make install && make mock
-```
-
-Usa **fixtures locales** y **vector store en memoria**. No necesita Qdrant, MySQL, ni API keys.
-
-Para un solo comando en modo dev (mock):
-
-```bash
-make dev          # install + up + mock
-```
-
-> **⚠️ Nota**: no existe un solo comando que haga todo el pipeline real porque requiere MySQL, S3 y OpenAI accesibles.
+> 💡 `make quickstart` descarga un backup de Qdrant (28 MB) con los embeddings ya calculados.
+> No gasta en OpenAI. Alternativa: `make ingest` re-indexa desde cero.
 
 ## Qué hace
 
@@ -42,12 +32,10 @@ Permite consultar certificados de calibración mediante un pipeline RAG que **se
 - Si la respuesta generada alucina → regenera con más contexto (máx. 2 veces).
 - Si la respuesta no resuelve la pregunta → reescribe y vuelve a intentar.
 
-El sistema funciona en dos modos:
-
 | Modo | Datos | Vector store | Para qué |
 |---|---|---|---|
-| `mock` (default) | JSON fixtures locales | En memoria | Demo rápida, sin dependencias externas |
-| `real` | MySQL + S3 + Qdrant | Qdrant con OpenAI embeddings | Producción, 154 certificados reales |
+| `mock` (default) | JSON fixtures locales | En memoria | Demo rápida, sin dependencias |
+| `real` | MySQL + Qdrant + S3 | Qdrant con OpenAI embeddings | Producción, 154 certificados reales |
 
 ## Arquitectura del grafo
 
@@ -71,23 +59,20 @@ flowchart TD
 
 | Nodo | Función | Tecnología |
 |---|---|---|
-| `route_question` | Clasifica la pregunta: ¿vectorstore o web search? | Pydantic structured output + GPT-4o-mini |
-| `retrieve` | Recupera documentos del vector store con tenant isolation | Qdrant (real) o InMemory (mock) |
-| `grade_documents` | Evalúa relevancia de cada documento recuperado | Pydantic `GradeDocuments` + GPT-4o-mini |
-| `transform_query` | Reescribe la pregunta para mejorar la recuperación | GPT-4o-mini + StrOutputParser |
-| `web_search` | Busca en la web conocimiento externo | Tavily Search API |
-| `generate` | Genera la respuesta con el contexto recuperado | GPT-4o-mini + RAG prompt inline |
-| `hallucination_check` | Verifica que la respuesta esté respaldada y sea útil | `GradeHallucinations` + `GradeAnswer` |
+| `route_question` | Clasifica vectorstore vs web search | Pydantic structured output + GPT-4o-mini |
+| `retrieve` | Recupera documentos con tenant isolation | Qdrant (real) o InMemory (mock) |
+| `grade_documents` | Evalúa relevancia de cada documento | GPT-4o-mini + GradeDocuments schema |
+| `transform_query` | Reescribe la pregunta (loop 1) | GPT-4o-mini + StrOutputParser |
+| `web_search` | Busca conocimiento externo | Tavily Search API |
+| `generate` | Genera respuesta con contexto | GPT-4o-mini + RAG prompt |
+| `hallucination_check` | Verifica groundedness + utilidad (loop 2) | GradeHallucinations + GradeAnswer |
 
 ### Loops de auto-corrección
 
-1. **Rewrite loop** — si ningún documento pasa el grading: `transform_query → retrieve` (máx. 3 intentos).
-2. **Regenerate loop** — si la respuesta alucina: `generate → hallucination_check → generate` (máx. 2 intentos).
-3. **Not-useful path** — si la respuesta es correcta pero no resuelve: `hallucination_check → transform_query`.
+1. **Rewrite loop** — si ningún documento pasa el grading → reescribe → reintenta (máx. 3).
+2. **Regenerate loop** — si la respuesta alucina → regenera (máx. 2). Si no es útil → reescribe.
 
 ## Pipeline de ingesta (modo real)
-
-Los certificados de calibración se ingieren desde MySQL y S3 mediante un pipeline de extracción multi-herramienta:
 
 ```
 MySQL (metadata) ──→ S3 (PDFs) ──→ PyMuPDF (texto limpio)
@@ -100,77 +85,60 @@ MySQL (metadata) ──→ S3 (PDFs) ──→ PyMuPDF (texto limpio)
                               Qdrant (tenant isolation por customer_id)
 ```
 
-Cada chunk en Qdrant incluye payload enriquecido: `certificate_code`, `customer_id`, `issue_date`, `chunk_type`, `parameter`.
+Cada chunk en Qdrant incluye payload enriquecido: `certificate_code`, `customer_id`, `customer_name`, `issue_date` (en español: "mayo 2026"), `status`, `chunk_type`.
 
 ### Ejecutar la ingesta
 
-Requiere MySQL, S3, Qdrant, y OPENAI_API_KEY configurados en `.env`.
-
 ```bash
-make up          # levanta Qdrant (docker compose up -d)
-make ingest      # corre el pipeline completo: MySQL → S3 → PyMuPDF → Camelot → Unstructured → Qdrant
+make ingest      # requiere .env con credenciales de MySQL, S3, OpenAI
 ```
 
-## Instalación
+Alternativa sin gastar en OpenAI:
 
 ```bash
-git clone https://github.com/emersonheto/certilab-adaptive-rag.git
-cd certilab-adaptive-rag
-uv sync
-cp .env.example .env
-# Editar .env con tu OPENAI_API_KEY
+make restore     # descarga y restaura 3,848 vectores pre-calculados
 ```
 
-### Setup completo con datos reales (opcional)
+## Notebook
 
 ```bash
-make quickstart    # levanta Qdrant + MySQL + restaura 3,848 vectores pre-calculados
-make real          # prueba el demo en modo real
+make notebook    # abre Jupyter local
 ```
 
-> 💡 `make quickstart` descarga un backup de Qdrant (28 MB) con los embeddings ya calculados.
-> No necesita gastar en OpenAI. Alternativa: `make ingest` re-indexa desde cero.
-
-### Solo modo mock (sin Docker)
-
-```bash
-make mock     # corre el demo con datos locales
-```
-
-## Uso
-
-### Demo CLI
-
-```bash
-# Modo mock — recomendedo via Makefile (sin servicios externos)
-make mock
-
-# También funciona directamente:
-uv run python -m app.adaptive_rag.demo "¿Cuántos certificados tiene el cliente 101?"
-
-# Modo real (requiere Qdrant con datos indexados)
-APP_MODE=real uv run python -m app.adaptive_rag.demo "¿Cuál fue la temperatura máxima a 105°C?"
-```
-
-### Notebook
-
-```bash
-uv run jupyter notebook notebooks/adaptive_rag_demo.ipynb
-```
-
-El notebook ejecuta el grafo con `graph.stream()` y muestra cada nodo, incluyendo los loops de auto-corrección en acción.
+Funciona también en **Google Colab**: File → Open notebook → GitHub → `emersonheto/certilab-adaptive-rag`.
 
 ### Consultas de ejemplo
 
 ```bash
-# Ruta vectorstore — certificados
-"¿Cuántos certificados de calibración emitió ALS PERU en 2026?"
+# Por cliente (tenant isolation)
+"¿Qué certificados tiene ALS PERU?"
 
-# Ruta web_search — conocimiento externo
-"¿Qué norma INDECOPI aplica para calibración de termómetros?"
+# Por procedimiento técnico
+"¿Qué procedimiento de calibración sigue la norma INDECOPI?"
 
-# Self-correction — demuestra el rewrite loop
-"Dame info de la plancha"
+# Por datos de medición (tablas)
+"¿Cuál fue la temperatura máxima a 105°C?"
+
+# Por fecha y tipo (metadata)
+"¿Qué certificados acreditados se emitieron en mayo 2026?"
+
+# Ambigua — dispara el rewrite loop
+"Dame info de calibración"
+```
+
+## Comandos disponibles
+
+```bash
+make help        # ver todos los comandos
+make mock        # demo sin Docker (datos locales)
+make quickstart  # setup completo: Docker + datos vectoriales
+make real        # demo con datos reales
+make restore     # restaurar vectores de Qdrant (28 MB download)
+make ingest      # re-indexar desde cero (gasta OpenAI API)
+make notebook    # abrir Jupyter
+make test        # ejecutar tests (58)
+make lint        # ruff + mypy
+make clean       # detener Docker y borrar datos
 ```
 
 ## Tecnologías
@@ -179,17 +147,17 @@ El notebook ejecuta el grafo con `graph.stream()` y muestra cada nodo, incluyend
 |---|---|
 | Lenguaje | Python 3.11+ |
 | Grafo RAG | LangGraph (StateGraph) |
-| Embeddings | OpenAI text-embedding-3-small |
+| Embeddings | OpenAI text-embedding-3-small (1536-dim) |
 | LLM | OpenAI GPT-4o-mini |
-| Vector store | Qdrant (tenant isolation) |
+| Vector store | Qdrant (tenant isolation por customer_id) |
 | Extracción de texto | PyMuPDF (fitz) |
 | Extracción de tablas | Camelot (99% accuracy) |
 | Chunking semántico | Unstructured (chunk_by_title) |
 | Web search | Tavily Search API |
 | Schemas | Pydantic v2 (structured output) |
 | Observabilidad | Phoenix / OpenInference |
-| Datos | MySQL + Amazon S3 |
-| Testing | pytest (52 tests) |
+| Base de datos | MySQL 8.0 (Docker) |
+| Testing | pytest (58 tests) |
 
 ## Estructura del proyecto
 
@@ -208,24 +176,22 @@ app/
 ├── tools/               # Embeddings, OpenAI, Tavily, MySQL connector
 ├── observability/       # Phoenix tracing (trace_span)
 └── security/            # Roles y tenant isolation (Principal, AccessScope)
+
+data/
+├── mock/                # Fixtures JSON (modo mock)
+├── pdf_text/            # Texto mock de PDFs
+└── sql/                 # Seed de MySQL (12 clientes + 177 certificados)
+
+docs/
+├── course-alignment.md  # Alineación con requisitos del enunciado
+└── entrega.md           # Instrucciones paso a paso para el profesor
 ```
 
 ## Pruebas
 
 ```bash
-make check              # lint + typecheck + tests, de un solo comando
-make test               # solo tests
-make test-coverage      # tests con reporte de cobertura
-make lint               # solo ruff
-make typecheck          # solo mypy
-```
-
-O directamente:
-
-```bash
-uv run pytest -q        # 52 tests
-uv run ruff check .     # Linting
-uv run mypy app/        # Type checking
+make test    # 58 tests
+make lint    # ruff + mypy
 ```
 
 ## Referencias
