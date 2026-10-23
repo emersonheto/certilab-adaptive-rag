@@ -229,3 +229,7 @@ Configured checks include:
 - [PyMuPDF](https://pymupdf.readthedocs.io/)
 - [Camelot](https://camelot-py.readthedocs.io/)
 - [Unstructured](https://docs.unstructured.io/)
+
+## Autor
+
+Desarrollado por [Emerson Herrera Tolentino](https://portfolio.certilab.app), GenAI & RAG Engineer. El caso de estudio está en [Certilab RAG](https://portfolio.certilab.app/case-studies/certilab-rag).
